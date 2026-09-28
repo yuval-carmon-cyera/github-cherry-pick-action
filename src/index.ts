@@ -6,8 +6,9 @@ import * as github from '@actions/github'
 import {Inputs, createPullRequest} from './github-helper'
 import {PullRequest} from '@octokit/webhooks-definitions/schema'
 
-const CHERRYPICK_EMPTY =
-  'The previous cherry-pick is now empty, possibly due to conflict resolution.'
+// git's wording when the pick applied cleanly but produced no change. Prefix match on purpose: the
+// trailing "possibly due to conflict resolution." differs between git versions.
+const CHERRYPICK_EMPTY = 'The previous cherry-pick is now empty'
 
 // Matches any git cherry-pick conflict marker, e.g.:
 //   CONFLICT (content): Merge conflict in ...
@@ -15,6 +16,11 @@ const CHERRYPICK_EMPTY =
 //   CONFLICT (rename/delete): ...
 //   CONFLICT (add/add): ...
 const CHERRYPICK_CONFLICT = /^CONFLICT \(/m
+
+// What the run ended up doing. `created` and `created-with-conflicts` mean a PR exists (see the
+// `number` output); `already-present` means the change was already on the target branch and no PR
+// was opened. Callers that gate follow-up steps on `number != ''` keep working unchanged.
+export type Outcome = 'created' | 'created-with-conflicts' | 'already-present'
 
 export async function run(): Promise<void> {
   try {
@@ -88,6 +94,7 @@ export async function run(): Promise<void> {
     core.info(`Cherry pick stdout: ${result.stdout}`)
     core.info(`Cherry pick stderr: ${result.stderr}`)
 
+    let outcome: Outcome = 'created'
     if (
       result.exitCode !== 0 &&
       (CHERRYPICK_CONFLICT.test(result.stderr) ||
@@ -95,13 +102,29 @@ export async function run(): Promise<void> {
     ) {
       await gitExecution(['add', '-A'])
       await gitExecution(['commit', '-m', 'Cherry picking with conflicts'])
-      core.setOutput('does_pr_have_conflicts', 'true')
-    } else if (
-      result.exitCode !== 0 &&
-      !result.stderr.includes(CHERRYPICK_EMPTY)
-    ) {
-      throw new Error(`Unexpected error: ${result.stderr}`)
+      outcome = 'created-with-conflicts'
+    } else if (result.exitCode !== 0) {
+      if (!result.stderr.includes(CHERRYPICK_EMPTY)) {
+        throw new Error(`Unexpected error: ${result.stderr}`)
+      }
+      // The pick applied but changed nothing: the change is already on the target (a hand-made
+      // backport, a label round trip, a rebased duplicate). Pushing the branch anyway left it
+      // identical to the target and the PR API answered 422 "No commits between ..." - a red job
+      // and a failure alert for a change that is exactly where it should be. Leave the sequencer
+      // clean and stop here instead.
+      await gitExecution(['cherry-pick', '--skip'])
+      core.info(
+        `Nothing to cherry-pick: ${githubSha} is already on ${inputs.branch}. No PR opened.`
+      )
+      core.setOutput('outcome', 'already-present')
+      core.setOutput('does_pr_have_conflicts', 'false')
+      core.endGroup()
+      return
     }
+    core.setOutput(
+      'does_pr_have_conflicts',
+      String(outcome === 'created-with-conflicts')
+    )
 
     core.endGroup()
 
@@ -120,6 +143,7 @@ export async function run(): Promise<void> {
     core.setOutput('data', JSON.stringify(pull.data))
     core.setOutput('number', pull.data.number)
     core.setOutput('html_url', pull.data.html_url)
+    core.setOutput('outcome', outcome)
     core.endGroup()
   } catch (err: unknown) {
     if (err instanceof Error) {

@@ -119,11 +119,17 @@ Mor informatoin can be found in the [GitHub Blog](https://github.blog/2020-08-03
 
 ### Action outputs
 
-| output   | value |
-|----------| ----- |
-| data     | [See Response](https://docs.github.com/en/rest/issues/issues#create-an-issue) |
-| html_url | the issue's web url |
-| number   | the issue's number |
+| output                 | value |
+|------------------------| ----- |
+| data                   | [See Response](https://docs.github.com/en/rest/issues/issues#create-an-issue). Empty when `outcome` is `already-present`. |
+| html_url               | the pull request's web url. Empty when `outcome` is `already-present`. |
+| number                 | the pull request's number. Empty when `outcome` is `already-present`. |
+| does_pr_have_conflicts | `true` when the pick hit conflicts and the PR was opened with the conflict markers committed |
+| outcome                | `created`, `created-with-conflicts`, or `already-present` |
+
+If the cherry-pick applies as an empty commit (the change is already on the target branch), the
+action logs that, sets `outcome=already-present`, and exits successfully without pushing a branch
+or opening a pull request.
 
 ## License
 

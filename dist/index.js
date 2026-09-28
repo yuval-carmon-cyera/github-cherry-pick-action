@@ -10374,7 +10374,9 @@ const child_process_1 = __nccwpck_require__(2081);
 const utils = __importStar(__nccwpck_require__(1314));
 const github = __importStar(__nccwpck_require__(5438));
 const github_helper_1 = __nccwpck_require__(5366);
-const CHERRYPICK_EMPTY = 'The previous cherry-pick is now empty, possibly due to conflict resolution.';
+// git's wording when the pick applied cleanly but produced no change. Prefix match on purpose: the
+// trailing "possibly due to conflict resolution." differs between git versions.
+const CHERRYPICK_EMPTY = 'The previous cherry-pick is now empty';
 // Matches any git cherry-pick conflict marker, e.g.:
 //   CONFLICT (content): Merge conflict in ...
 //   CONFLICT (modify/delete): ... deleted in HEAD and modified in ...
@@ -10443,17 +10445,31 @@ function run() {
             core.info(`Cherry pick finished with exit code ${result.exitCode}`);
             core.info(`Cherry pick stdout: ${result.stdout}`);
             core.info(`Cherry pick stderr: ${result.stderr}`);
+            let outcome = 'created';
             if (result.exitCode !== 0 &&
                 (CHERRYPICK_CONFLICT.test(result.stderr) ||
                     CHERRYPICK_CONFLICT.test(result.stdout))) {
                 yield gitExecution(['add', '-A']);
                 yield gitExecution(['commit', '-m', 'Cherry picking with conflicts']);
-                core.setOutput('does_pr_have_conflicts', 'true');
+                outcome = 'created-with-conflicts';
             }
-            else if (result.exitCode !== 0 &&
-                !result.stderr.includes(CHERRYPICK_EMPTY)) {
-                throw new Error(`Unexpected error: ${result.stderr}`);
+            else if (result.exitCode !== 0) {
+                if (!result.stderr.includes(CHERRYPICK_EMPTY)) {
+                    throw new Error(`Unexpected error: ${result.stderr}`);
+                }
+                // The pick applied but changed nothing: the change is already on the target (a hand-made
+                // backport, a label round trip, a rebased duplicate). Pushing the branch anyway left it
+                // identical to the target and the PR API answered 422 "No commits between ..." - a red job
+                // and a failure alert for a change that is exactly where it should be. Leave the sequencer
+                // clean and stop here instead.
+                yield gitExecution(['cherry-pick', '--skip']);
+                core.info(`Nothing to cherry-pick: ${githubSha} is already on ${inputs.branch}. No PR opened.`);
+                core.setOutput('outcome', 'already-present');
+                core.setOutput('does_pr_have_conflicts', 'false');
+                core.endGroup();
+                return;
             }
+            core.setOutput('does_pr_have_conflicts', String(outcome === 'created-with-conflicts'));
             core.endGroup();
             // Push new branch
             core.startGroup('Push new branch to remote');
@@ -10470,6 +10486,7 @@ function run() {
             core.setOutput('data', JSON.stringify(pull.data));
             core.setOutput('number', pull.data.number);
             core.setOutput('html_url', pull.data.html_url);
+            core.setOutput('outcome', outcome);
             core.endGroup();
         }
         catch (err) {

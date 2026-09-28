@@ -53,6 +53,17 @@ inputs:
   force:
     description: "Forcefully push the branch to remote branch"
     required: false
+outputs:
+  number:
+    description: "Number of the pull request that was opened. Empty when `outcome` is `already-present`."
+  html_url:
+    description: "URL of the pull request that was opened. Empty when `outcome` is `already-present`."
+  data:
+    description: "The created pull request as JSON. Empty when `outcome` is `already-present`."
+  does_pr_have_conflicts:
+    description: "`true` when the cherry-pick hit conflicts and the PR was opened with the conflict markers committed."
+  outcome:
+    description: "`created`, `created-with-conflicts`, or `already-present` (the change was already on the target branch; nothing pushed, no PR opened)."
 runs:
   using: node16
   main: dist/index.js
